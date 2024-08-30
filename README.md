@@ -2,6 +2,10 @@
 First Strike Intrusion Detection system with machine learning analysis. 
 
 
+Readings: https://www.sciencedirect.com/science/article/pii/S2665963822001300
+Github: https://github.com/SoftwareImpacts/SIMPAC-2022-260
+
+
 Current actions by code:
 
 is_public_ip(ip_address)
