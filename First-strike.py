@@ -6,6 +6,8 @@ import queue
 import datetime
 import socket
 import psutil
+from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import cpu_count
 
 try:
     import scapy.all as scapy
@@ -21,7 +23,11 @@ sniffing = False
 file_index = 1
 
 # Queue for thread-safe GUI updates
-packet_queue = queue.Queue()
+packet_queue = queue.Queue(maxsize=1000)  # Increase queue size for higher throughput
+
+# Thread pool for handling packet processing
+max_workers = min(32, cpu_count() + 4)  # Use a reasonable number of threads based on CPU cores
+executor = ThreadPoolExecutor(max_workers=max_workers)
 
 # List of known malicious IPs for demonstration purposes
 malicious_ips = ["192.168.1.100", "10.0.0.5"]
@@ -104,7 +110,7 @@ def analyze_packet(packet):
     }
 
     # Check if the packet has an IP layer and if the IP is public
-    if packet.haslayer(scapy.IP) and is_public_ip(packet[scapy.IP].dst):
+    if packet.haslayer(scapy.IP):
         packet_info["source"] = packet[scapy.IP].src
         packet_info["destination"] = packet[scapy.IP].dst
         packet_info["protocol"] = packet[scapy.IP].proto
@@ -141,10 +147,24 @@ def analyze_packet(packet):
 
     return packet_info
 
+# Function to determine if the packet is a broadcast or contains only MAC addresses
+def is_broadcast_or_mac_only(packet_info):
+    # Check if the packet only has MAC addresses and no other meaningful data
+    if packet_info["source"] == "N/A" and packet_info["destination"] == "N/A" and packet_info["dns_query"] == "N/A":
+        return True
+    # Check if the packet is a broadcast
+    if packet_info["dst_mac"] == "ff:ff:ff:ff:ff:ff":
+        return True
+    return False
+
 # Function to display packet in GUI
 def display_packet(packet):
     packet_info = analyze_packet(packet)
-    # Always include important fields like IP addresses, ports, DNS queries, device name, etc.
+
+    # Filter out broadcast and MAC-only packets
+    if is_broadcast_or_mac_only(packet_info):
+        return
+
     display_text = ", ".join(
         [f"Source MAC: {packet_info['src_mac']}" if packet_info['src_mac'] != "N/A" else "",
          f"Destination MAC: {packet_info['dst_mac']}" if packet_info['dst_mac'] != "N/A" else "",
@@ -175,8 +195,7 @@ def start_sniffing():
 
     def sniff_packets():
         while sniffing:
-            # Capture DNS traffic on both UDP and TCP
-            scapy.sniff(prn=display_packet, store=False)
+            scapy.sniff(prn=lambda pkt: executor.submit(display_packet, pkt), store=False)
 
     sniff_thread = threading.Thread(target=sniff_packets)
     sniff_thread.start()
@@ -225,8 +244,13 @@ def generate_report():
 
     for i, packet in enumerate(packet_data, start=1):
         if packet.strip():  # Ensure it's not an empty line
-            # Check if the packet contains meaningful data (IP addresses, DNS queries, ports, etc.)
-            if any(key in packet for key in ["Source IP:", "Destination IP:", "DNS Query:", "Source Port:", "Destination Port:"]):
+            if any(key in packet for key in ["Source IP:", "Destination IP:", "DNS Query:", "Source Port:", "Destination Port:", "Protocol"]):
+                # Filter out packets with only MAC addresses and broadcast packets
+                if "Source IP: N/A" in packet and "Destination IP: N/A" in packet:
+                    continue
+                if "Destination MAC: ff:ff:ff:ff:ff:ff" in packet:
+                    continue
+
                 meaningful_packet_count += 1
                 packet_lines = packet.split(", ")
                 filtered_packet_lines = [line for line in packet_lines if "N/A" not in line]
@@ -251,7 +275,6 @@ def generate_report():
 
     # Clear packet data after generating the report
     clear_packet_data()
-
 
 # Initialize main window
 root = tk.Tk()
