@@ -7,6 +7,7 @@ Project Overview: The project as a whole is an anomaly based IDS. We have packet
 
 Readings: https://www.sciencedirect.com/science/article/pii/S2665963822001300
 Github: https://github.com/SoftwareImpacts/SIMPAC-2022-260
+Github for data analysis and ML-IDS: https://github.com/Western-OC2-Lab/Intrusion-Detection-System-Using-Machine-Learning/blob/main/Tree-based_IDS_GlobeCom19.ipynb
 
 
 DESCRIPTION: This code provides tools for capturing and analyzing network packets. It includes functions to check if an IP address is public, resolve IP addresses to domain names, and identify processes or devices associated with public IPs. It analyzes packets to extract details like IPs, MAC addresses, protocols, and DNS queries, and checks for malicious IPs. The GUI allows users to start and stop packet sniffing, display packet information, clear data, and generate reports summarizing the captured data.
