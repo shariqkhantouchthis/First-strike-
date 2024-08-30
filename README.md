@@ -2,6 +2,9 @@
 First Strike Intrusion Detection system with machine learning analysis. 
 
 
+Project Overview: The project as a whole is an anomaly based IDS. We have packet sniffing through python that gathers data such as IP address source and destination, MAC address source and destination, port number, and DNS query. Machine learning will be incorporated in order to match the information of the packets to detect any anomalies. Machine learning will be done through an intrusion data set (a CSV). Data will be added to the CSV through the sniffing application with its current contents in order to do the training. This model is then used to aid the sniffing application as mentioned previously regarding detecting anomalies. This information is gathered into data (report) which will be visualised in order to provide a comprehensive understanding of where the packets are coming from, what is malicious and what is potentially malicious (anomalies).
+
+
 Readings: https://www.sciencedirect.com/science/article/pii/S2665963822001300
 Github: https://github.com/SoftwareImpacts/SIMPAC-2022-260
 
