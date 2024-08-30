@@ -38,12 +38,18 @@ common_domains = ["youtube.com", "google.com", "facebook.com", "twitter.com", "i
 # Cache for DNS resolutions to improve performance
 dns_cache = {}
 
+# To filter out repetitive DNS queries within a certain timeframe
+seen_dns_queries = set()
+
 # Public IP ranges (IPv4)
 public_ip_ranges = [
     ("1.0.0.0", "126.255.255.255"),
     ("128.0.0.0", "191.255.255.255"),
     ("192.0.0.0", "223.255.255.255"),
 ]
+
+
+
 
 # Function to check if an IP address is public
 def is_public_ip(ip_address):
@@ -135,6 +141,20 @@ def analyze_packet(packet):
         if packet_info["source"] in malicious_ips or packet_info["destination"] in malicious_ips:
             packet_info["malicious"] = True
 
+
+ # Check if the packet is DNS traffic (port 53)
+    if packet_info['protocol'] == 17 and (packet_info['source_port'] == 53 or packet_info['destination_port'] == 53):
+        dns_query = packet_info.get('dns_query', '')
+        
+        # Filter out repetitive DNS queries
+        if dns_query in seen_dns_queries:
+            return  # Skip this packet
+        
+        # Add the DNS query to the seen set
+        seen_dns_queries.add(dns_query)
+
+
+
     # Check for DNS queries
     if packet.haslayer(scapy.DNSQR):
         dns_query = packet[scapy.DNSQR].qname.decode() if packet[scapy.DNSQR].qname else "N/A"
@@ -221,6 +241,7 @@ def process_queue():
 def clear_packet_data():
     scrolled_text.delete(1.0, tk.END)
 
+
 # Function to generate structured report without "N/A" fields and excluding packets with only basic info
 def generate_report():
     global file_index
@@ -241,6 +262,7 @@ def generate_report():
     report_text += "-" * 20 + "\n"
 
     meaningful_packet_count = 0
+    seen_packets = set()  # Set to track unique packets
 
     for i, packet in enumerate(packet_data, start=1):
         if packet.strip():  # Ensure it's not an empty line
@@ -251,6 +273,17 @@ def generate_report():
                 if "Destination MAC: ff:ff:ff:ff:ff:ff" in packet:
                     continue
 
+                # Create a unique representation of the packet (using the packet itself or a subset of its details)
+                packet_representation = packet
+
+                # Check if the packet has already been seen
+                if packet_representation in seen_packets:
+                    continue
+
+                # Add the packet to the set of seen packets
+                seen_packets.add(packet_representation)
+
+                # Add packet to the report
                 meaningful_packet_count += 1
                 packet_lines = packet.split(", ")
                 filtered_packet_lines = [line for line in packet_lines if "N/A" not in line]
@@ -275,6 +308,7 @@ def generate_report():
 
     # Clear packet data after generating the report
     clear_packet_data()
+
 
 # Initialize main window
 root = tk.Tk()
