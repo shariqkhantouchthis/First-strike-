@@ -1,8 +1,9 @@
 # First-strike-
 First Strike Intrusion Detection system with machine learning analysis. 
 
-UPDATE 30/08:  CODE SHOWS OUTPUTS FOR: 
+UPDATE 3/09:  CODE SHOWS OUTPUTS FOR: 
 Source IP, Destination IP, Source Mac, Destination MAC, Protocols. 
+Threat Detection Incorporated through a Github library of malicious attacks and IOCs. 
 
 
 Project Overview: The project as a whole is an anomaly based IDS. We have packet sniffing through python that gathers data such as IP address source and destination, MAC address source and destination, port number, and DNS query. Machine learning will be incorporated in order to match the information of the packets to detect any anomalies. Machine learning will be done through an intrusion data set (a CSV). Data will be added to the CSV through the sniffing application with its current contents in order to do the training. This model is then used to aid the sniffing application as mentioned previously regarding detecting anomalies. This information is gathered into data (report) which will be visualised in order to provide a comprehensive understanding of where the packets are coming from, what is malicious and what is potentially malicious (anomalies).
@@ -73,3 +74,4 @@ System requirements and libraries to be installed for code to work (PLS INSERT N
 6. socket: This is a standard Python library for network communication.
 8. psutil: This library provides system and process utilities. Install it via pip using pip install psutil.
 9. scapy: This is a powerful Python library for packet manipulation and analysis. If it's not already installed, it will be installed automatically by the code if needed.
+10. Change line 415  (desktop_path = "C:/Users/YOURDEVICENAME/OneDrive/Desktop") to the name of your device to add files to your desktop. 
