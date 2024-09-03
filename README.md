@@ -1,7 +1,7 @@
 # First-strike-
 First Strike Intrusion Detection system with machine learning analysis. 
 
-UPDATE 3/09:  CODE SHOWS OUTPUTS FOR: 
+UPDATE 3/09: FirststrikePatsUpdated CODE SHOWS OUTPUTS FOR: 
 Source IP, Destination IP, Source Mac, Destination MAC, Protocols. 
 Threat Detection Incorporated through a Github library of malicious attacks and IOCs. 
 
