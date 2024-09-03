@@ -17,6 +17,7 @@ from multiprocessing import cpu_count, Pool
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import requests
+import time  # Import time module to handle the timer
 
 try:
     import scapy.all as scapy
@@ -33,7 +34,7 @@ file_index = 1
 sniff_thread = None
 
 # Queue for thread-safe GUI updates
-packet_queue = queue.Queue(maxsize=1000)  # Increase queue size for higher throughput
+packet_queue = queue.Queue(maxsize=100)  # Increase queue size for higher throughput
 
 # Thread pool for handling packet processing
 max_workers = min(64, cpu_count() * 2)  # Dynamically adjust thread pool size based on CPU cores
@@ -74,6 +75,9 @@ threat_intelligence = {
 # Malicious website categories to detect
 malicious_categories = ["malware", "phishing", "spyware", "adware", "ransomware", "crypto-mining"]
 
+# Variables to manage pie chart update timing
+last_pie_chart_update_time = 0
+update_interval = 5  # Update the pie chart every 5 seconds
 
 # Function to fetch the list of malicious IPs from the ipsum repository
 def fetch_malicious_ips():
@@ -88,39 +92,43 @@ def fetch_malicious_ips():
         print(f"Failed to fetch malicious IPs: {e}")
         return []
 
-
 # Function to update threat intelligence with the fetched malicious IPs
 def update_threat_intelligence():
     malicious_ips = fetch_malicious_ips()
-    if malicious_ips:
+    if (malicious_ips):
         threat_intelligence["ips"]["High"].extend(malicious_ips)
         print(f"Added {len(malicious_ips)} IPs to High threat category.")
-
 
 # Initialize threat intelligence at the start of your program
 update_threat_intelligence()
 
-
 # Function to update the threat count pie chart
-def update_pie_chart():
-    figure.clear()
-    labels = threat_counts.keys()
-    sizes = threat_counts.values()
-    if sum(sizes) == 0:  # Avoid drawing if there are no data
-        sizes = [1]  # Prevent division by zero
-        labels = ["No Threats Detected"]
-        plt.pie(sizes, labels=labels, startangle=140, colors=['grey'])
-    else:
-        plt.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=['red', 'orange', 'blue', 'green'])
-    plt.axis('equal')
-    canvas.draw()
+def update_pie_chart(force_update=False):
+    global last_pie_chart_update_time
+    current_time = time.time()
 
-    # Update threat count labels
-    high_threat_label.config(text=f"High Threats: {threat_counts['High']}")
-    moderate_threat_label.config(text=f"Moderate Threats: {threat_counts['Moderate']}")
-    low_threat_label.config(text=f"Low Threats: {threat_counts['Low']}")
-    no_threat_label.config(text=f"No Threats: {threat_counts['No Threat']}")
+    # Check if the update interval has passed or if a forced update is requested
+    if (force_update or (current_time - last_pie_chart_update_time) >= update_interval):
+        figure.clear()
+        labels = threat_counts.keys()
+        sizes = threat_counts.values()
+        if sum(sizes) == 0:  # Avoid drawing if there are no data
+            sizes = [1]  # Prevent division by zero
+            labels = ["No Threats Detected"]
+            plt.pie(sizes, labels=labels, startangle=140, colors=['grey'])
+        else:
+            plt.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=['red', 'orange', 'blue', 'green'])
+        plt.axis('equal')
+        canvas.draw()
 
+        # Update threat count labels
+        high_threat_label.config(text=f"High Threats: {threat_counts['High']}")
+        moderate_threat_label.config(text=f"Moderate Threats: {threat_counts['Moderate']}")
+        low_threat_label.config(text=f"Low Threats: {threat_counts['Low']}")
+        no_threat_label.config(text=f"No Threats: {threat_counts['No Threat']}")
+
+        # Record the time of this update
+        last_pie_chart_update_time = current_time
 
 # Function to check if an IP address is public
 def is_public_ip(ip_address):
@@ -129,7 +137,6 @@ def is_public_ip(ip_address):
         if int.from_bytes(socket.inet_aton(start), 'big') <= ip_int <= int.from_bytes(socket.inet_aton(end), 'big'):
             return True
     return False
-
 
 # Function to resolve IP addresses back to domain names (only public IPs)
 def resolve_ip_to_domain(ip_address):
@@ -144,7 +151,6 @@ def resolve_ip_to_domain(ip_address):
     except (socket.herror, socket.gaierror):
         return "N/A"
 
-
 # Function to find the process associated with a given IP (only public IPs)
 def find_process_by_ip(ip_address):
     if not is_public_ip(ip_address):
@@ -158,7 +164,6 @@ def find_process_by_ip(ip_address):
                 pass
     return "Unknown", "N/A", "N/A"
 
-
 # Function to identify the device or network based on the IP address
 def identify_device(ip_address):
     if is_public_ip(ip_address):
@@ -168,7 +173,6 @@ def identify_device(ip_address):
         except (socket.herror, socket.gaierror):
             return "Unknown Device"
     return "Unknown Device"
-
 
 # Function to analyze packet (only public IPs)
 def analyze_packet(packet):
@@ -239,7 +243,6 @@ def analyze_packet(packet):
 
     return packet_info
 
-
 # Function to determine if the packet is a broadcast or contains only MAC addresses
 def is_broadcast_or_mac_only(packet_info):
     # Check if the packet only has MAC addresses and no other meaningful data
@@ -249,7 +252,6 @@ def is_broadcast_or_mac_only(packet_info):
     if packet_info["dst_mac"] == "ff:ff:ff:ff:ff:ff":
         return True
     return False
-
 
 # Function to check packet info against threat intelligence
 def check_threats(packet_info):
@@ -288,8 +290,8 @@ def check_threats(packet_info):
     if packet_info["malicious"]:
         threat_counts[packet_info["threat_level"]] += 1
 
+    # Throttle pie chart updates based on time interval
     update_pie_chart()
-
 
 # Function to display packet in GUI
 def display_packet(packet):
@@ -332,9 +334,8 @@ def display_packet(packet):
     display_text += "\n"
     packet_queue.put((display_text, color))
 
-    # Update the pie chart to reflect changes in the threat counts
+    # Throttle pie chart updates based on time interval
     update_pie_chart()
-
 
 # Function to start packet sniffing
 def start_sniffing():
@@ -354,7 +355,6 @@ def start_sniffing():
     sniff_thread.start()
     root.after(100, process_queue)
 
-
 # Function to stop packet sniffing
 def stop_sniffing():
     global sniffing, sniff_thread
@@ -372,7 +372,6 @@ def stop_sniffing():
     scrolled_text.insert(tk.END, "Sniffing stopped.\n", "info")
     scrolled_text.see(tk.END)
 
-
 # Function to process queue and update GUI
 def process_queue():
     while not packet_queue.empty():
@@ -382,11 +381,9 @@ def process_queue():
     if sniffing:
         root.after(100, process_queue)
 
-
 # Function to clear packet data when generating a report
 def clear_packet_data():
     scrolled_text.delete(1.0, tk.END)
-
 
 # Function to generate structured report including all packets with their severity level
 def generate_report():
@@ -427,8 +424,6 @@ def generate_report():
 
     # Clear packet data after generating the report
     clear_packet_data()
-
-
 
 # Initialize main window
 root = tk.Tk()
@@ -505,7 +500,6 @@ low_threat_label.pack(side=tk.LEFT, padx=5, pady=5)
 no_threat_label = ttk.Label(control_frame, text="No Threats: 0")
 no_threat_label.pack(side=tk.LEFT, padx=5, pady=5)
 
-
 # Initialize the pie chart with no data
 def initialize_pie_chart():
     labels = threat_counts.keys()
@@ -518,7 +512,6 @@ def initialize_pie_chart():
         plt.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=['red', 'orange', 'blue', 'green'])
     plt.axis('equal')
     canvas.draw()
-
 
 # Add start, stop, and generate report buttons
 start_button = ttk.Button(control_frame, text="Start Sniffing", command=start_sniffing)
