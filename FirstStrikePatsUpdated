@@ -357,11 +357,13 @@ def start_sniffing():
     update_pie_chart(force_update=True)
 
     def sniff_packets():
-        scapy.sniff(prn=lambda pkt: executor.submit(display_packet, pkt), store=False)
+        # Enable promiscuous mode by setting promisc=True
+        scapy.sniff(prn=lambda pkt: executor.submit(display_packet, pkt), store=False, promisc=True)
 
     sniff_thread = threading.Thread(target=sniff_packets, daemon=True)
     sniff_thread.start()
     root.after(100, process_queue)
+
 
 # Function to Stop Packet Sniffing
 def stop_sniffing():
