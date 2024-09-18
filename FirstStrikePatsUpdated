@@ -282,12 +282,17 @@ def display_packet(packet):
         f"Resolved Domain: {packet_info['resolved_domain']}\n"
         f"Device: {packet_info['device']}\n"
         f"Threat Level: {threat_level}\n"
-        f"{'[MALICIOUS]' if packet_info['malicious'] else 'No Threat'}\n"
-        f"{'-'*40}\n"
     )
+
+    # Only add "[No Threat]" if the threat level is actually "No Threat"
+    if packet_info["threat_level"] == "No Threat":
+        display_text += "[No Threat]\n"
+
+    display_text += "-" * 40 + "\n"
 
     # Add to queue for thread-safe GUI update
     packet_queue.put((display_text, color))
+
 
 # Function to Update Pie Chart
 def update_pie_chart(force_update=False):
@@ -429,6 +434,72 @@ def generate_report():
 
         # Add each line to the current packet block
         current_packet.append(line)
+
+    # Add the last packet if it exists and is valid
+    if current_packet:
+        combined_packet = "\n".join(current_packet)
+        if not (
+            "Source IP: N/A" in combined_packet and
+            "Destination IP: N/A" in combined_packet and
+            "Protocol: N/A" in combined_packet and
+            "Source Port: N/A" in combined_packet and
+            "Destination Port: N/A" in combined_packet and
+            "DNS Query: N/A" in combined_packet and
+            "Resolved Domain: N/A" in combined_packet
+        ):
+            packet_data.append(combined_packet)
+
+    report_text += f"Total Packets Captured: {len(packet_data)}\n\n"
+    report_text += "Packet Information:\n"
+    report_text += "-" * 20 + "\n"
+
+    # Clear the report text area
+    report_scrolled_text.delete(1.0, tk.END)
+
+    # Add each packet's details to the report and apply color-coding based on threat level
+    for i, packet in enumerate(packet_data, start=1):
+        # Check threat level from packet text
+        threat_level = "No Threat"
+        for line in packet.split("\n"):
+            if "Threat Level" in line:
+                threat_level = line.split(":")[1].strip()
+                break
+
+        # Append the packet data to the report text
+        report_scrolled_text.insert(tk.END, f"Packet {i}:\n", "report")
+
+        # Color-code based on the threat level
+        color_tag = "green"  # Default color for "No Threat"
+        if "High Threat" in threat_level:
+            color_tag = "red"
+        elif "Moderate Threat" in threat_level:
+            color_tag = "orange"
+        elif "Low Threat" in threat_level:
+            color_tag = "blue"
+
+        # Add the packet data line by line, using the appropriate color tag
+        for line in packet.split("\n"):
+            report_scrolled_text.insert(tk.END, f"{line}\n", color_tag)
+
+        # Insert a separator after each packet
+        report_scrolled_text.insert(tk.END, "\n" + "-" * 40 + "\n", "report")
+
+    # Save the report to a file on Desktop
+    desktop_path = os.path.join(os.path.join(os.path.expanduser('~')), 'Desktop')
+    while os.path.exists(os.path.join(desktop_path, f'packet_report_{file_index}.txt')):
+        file_index += 1
+    report_file_path = os.path.join(desktop_path, f'packet_report_{file_index}.txt')
+    try:
+        with open(report_file_path, "w") as report_file:
+            report_file.write(report_text)
+        scrolled_text.insert(tk.END, f"Report generated and saved as '{report_file_path}'\n", "info")
+    except Exception as e:
+        scrolled_text.insert(tk.END, f"Failed to save report: {e}\n", "info")
+    scrolled_text.see(tk.END)
+
+    # Clear packet data after generating the report
+    clear_packet_data()
+
 
     # Add the last packet if it exists and is valid
     if current_packet:
