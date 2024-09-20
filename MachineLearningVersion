@@ -1,0 +1,686 @@
+import os
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+import threading
+import queue
+import datetime
+import socket
+import psutil
+import time
+from collections import defaultdict
+import requests
+from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import cpu_count
+from sklearn.ensemble import IsolationForest
+import numpy as np
+import time
+
+
+# Create an Isolation Forest model
+model = IsolationForest(n_estimators=100, contamination=0.01, random_state=42)
+
+# Store data for training (collect normal traffic features)
+packet_data_for_training = []
+
+# Function to extract features from a packet
+def extract_features(packet):
+    """
+    Extract features from the packet to be used for anomaly detection.
+    Example features: source IP, destination IP, protocol, ports, packet length.
+    """
+    if packet.haslayer(scapy.IP):
+        ip_layer = packet[scapy.IP]
+        features = [
+            ip_layer.src,                   # Source IP
+            ip_layer.dst,                   # Destination IP
+            ip_layer.proto,                 # Protocol
+            packet[scapy.Raw].load,         # Payload size (if available)
+            time.time()                     # Timestamp to calculate inter-arrival time
+        ]
+        return features
+    return None
+
+# Function to train the model on normal traffic data
+def train_anomaly_detection_model():
+    global model
+    # Convert the packet data to a numpy array for training
+    if len(packet_data_for_training) > 0:
+        packet_data_array = np.array(packet_data_for_training)
+        model.fit(packet_data_array)
+        print("Anomaly detection model trained on normal traffic.")
+
+# Analyze packets for anomaly detection
+def analyze_packet_for_anomalies(packet):
+    features = extract_features(packet)
+    if features is not None:
+        # Convert features to the format needed for the model
+        features_array = np.array(features).reshape(1, -1)
+
+        # Use the model to predict if the packet is an anomaly
+        is_anomaly = model.predict(features_array)[0] == -1
+
+        if is_anomaly:
+            print(f"Anomalous Packet Detected: {features}")
+            # Update threat counts or trigger alerts based on anomaly detection
+            check_threats({"threat_level": "High Threat"})
+        else:
+            check_threats({"threat_level": "No Threat"})
+
+# Function to collect normal traffic for training
+def collect_training_data(packet):
+    features = extract_features(packet)
+    if features is not None:
+        packet_data_for_training.append(features)
+
+# Use this function to collect normal traffic for training
+# scapy.sniff(prn=collect_training_data, store=False, count=1000)  # Collect 1000 packets
+
+
+
+# Attempt to import scapy, install if not present
+try:
+    import scapy.all as scapy
+except ImportError:
+    import subprocess
+    import sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "scapy"])
+    import scapy.all as scapy
+
+# Attempt to import matplotlib, install if not present
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+except ImportError:
+    import subprocess
+    import sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "matplotlib"])
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+# Global Variables
+sniffing = False
+file_index = 1
+sniff_thread = None
+packet_queue = queue.Queue(maxsize=50)
+max_workers = min(64, cpu_count() * 2)
+executor = ThreadPoolExecutor(max_workers=max_workers)
+
+# Threat Counts for Pie Chart
+threat_counts = {"High": 0, "Moderate": 0, "Low": 0, "No Threat": 0}
+
+# Threat Intelligence Data
+threat_intelligence = {
+    "ips": {
+        "High": ["192.168.1.100", "45.33.32.156", "103.247.36.32"],  # Example high-threat IPs
+        "Moderate": ["198.51.100.23", "93.184.216.34"],              # Example moderate-threat IPs
+        "Low": ["8.8.8.8", "8.8.4.4"]                                 # Example low-threat IPs
+    },
+    "ports": {
+        "High": [6667, 23, 445, 3389],
+        "Moderate": [1337, 8080],
+        "Low": [80, 443]
+    },
+    "protocols": {
+        "High": ["UDP Flood", "ICMP Flood", "DNS Tunneling"],
+        "Moderate": ["SSDP", "SNMP"],
+        "Low": ["HTTP", "HTTPS"]
+    },
+    "domains": {
+        "High": ["malicious-domain.com", "bad-domain.xyz", "dodgy-site.pw"],
+        "Moderate": ["newly-registered.com", "suspicious-site.top"],
+        "Low": ["example.com", "my-safe-site.com"]
+    }
+}
+
+# Protocol-Based Threat Levels
+protocol_threat_levels = {
+    1: "No Threat",        # ICMP
+    6: "Low Threat",       # TCP
+    17: "Moderate Threat", # UDP
+    47: "High Threat",     # GRE
+    50: "High Threat",     # ESP
+    51: "Moderate Threat"  # AH
+}
+
+# DNS Query Cache
+seen_dns_queries = defaultdict(int)
+
+# Malicious Categories (Not directly used but can be expanded)
+malicious_categories = ["malware", "phishing", "spyware", "adware", "ransomware", "crypto-mining"]
+
+# Pie Chart Update Timing
+last_pie_chart_update_time = 0
+update_interval = 5  # seconds
+
+# DNS Cache for Resolved Domains
+dns_cache = {}
+
+# Function to Fetch Malicious IPs from an External Source
+def fetch_malicious_ips():
+    url = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        ips = [line.strip() for line in response.text.splitlines() if line and not line.startswith("#")]
+        return ips
+    except requests.RequestException as e:
+        print(f"Failed to fetch malicious IPs: {e}")
+        return []
+
+# Update Threat Intelligence with Fetched Malicious IPs
+def update_threat_intelligence():
+    malicious_ips = fetch_malicious_ips()
+    if malicious_ips:
+        threat_intelligence["ips"]["High"].extend(malicious_ips)
+        print(f"Added {len(malicious_ips)} IPs to High threat category.")
+
+# Initialize Threat Intelligence at Start
+update_threat_intelligence()
+
+# Function to Check if IP is Public
+def is_public_ip(ip_address):
+    try:
+        ip_int = int.from_bytes(socket.inet_aton(ip_address), 'big')
+        for start, end in [("1.0.0.0", "126.255.255.255"),
+                           ("128.0.0.0", "191.255.255.255"),
+                           ("192.0.0.0", "223.255.255.255")]:
+            if int.from_bytes(socket.inet_aton(start), 'big') <= ip_int <= int.from_bytes(socket.inet_aton(end), 'big'):
+                return True
+        return False
+    except socket.error:
+        return False
+
+# Function to Resolve IP to Domain Name
+def resolve_ip_to_domain(ip_address):
+    if not is_public_ip(ip_address):
+        return "N/A"
+    if ip_address in dns_cache:
+        return dns_cache[ip_address]
+    try:
+        domain_name = socket.gethostbyaddr(ip_address)[0]
+        dns_cache[ip_address] = domain_name
+        return domain_name
+    except (socket.herror, socket.gaierror):
+        return "N/A"
+
+# Function to Find Process by IP Address
+def find_process_by_ip(ip_address):
+    if not is_public_ip(ip_address):
+        return "Unknown", "N/A", "N/A"
+    for conn in psutil.net_connections(kind='inet'):
+        if conn.raddr and conn.raddr.ip == ip_address:
+            try:
+                process = psutil.Process(conn.pid)
+                return process.name(), process.pid, process.exe()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+    return "Unknown", "N/A", "N/A"
+
+# Function to Analyze Packet and Determine Threat Level
+def analyze_packet(packet):
+    packet_info = {
+        "src_mac": packet.src if packet.haslayer(scapy.Ether) else "N/A",
+        "dst_mac": packet.dst if packet.haslayer(scapy.Ether) else "N/A",
+        "source": "N/A",
+        "destination": "N/A",
+        "protocol": "N/A",
+        "sport": "N/A",
+        "dport": "N/A",
+        "malicious": False,
+        "domain": "N/A",
+        "resolved_domain": "N/A",
+        "app_name": "N/A",
+        "app_pid": "N/A",
+        "app_exe": "N/A",
+        "dns_query": "N/A",
+        "device": "Unknown Device",
+        "threat_level": "No Threat"  # Default
+    }
+
+    if packet.haslayer(scapy.IP):
+        ip_layer = packet[scapy.IP]
+        packet_info["source"] = ip_layer.src
+        packet_info["destination"] = ip_layer.dst
+        protocol_id = ip_layer.proto
+        packet_info["protocol"] = protocol_id
+
+        # Base Threat Level from Protocol
+        base_threat_level = protocol_threat_levels.get(protocol_id, "Unknown Threat Level")
+        packet_info["threat_level"] = base_threat_level
+
+        # Check for Malicious IPs
+        src_ip = packet_info["source"]
+        dst_ip = packet_info["destination"]
+        src_high = src_ip in threat_intelligence["ips"]["High"]
+        dst_high = dst_ip in threat_intelligence["ips"]["High"]
+        src_moderate = src_ip in threat_intelligence["ips"]["Moderate"]
+        dst_moderate = dst_ip in threat_intelligence["ips"]["Moderate"]
+        src_low = src_ip in threat_intelligence["ips"]["Low"]
+        dst_low = dst_ip in threat_intelligence["ips"]["Low"]
+
+        if src_high or dst_high:
+            packet_info["malicious"] = True
+            packet_info["threat_level"] = "High Threat"
+        elif src_moderate or dst_moderate:
+            # Elevate to Moderate Threat if current is lower
+            if base_threat_level not in ["High Threat", "Moderate Threat"]:
+                packet_info["threat_level"] = "Moderate Threat"
+        elif src_low or dst_low:
+            # Elevate to Low Threat if current is lower
+            if base_threat_level not in ["High Threat", "Moderate Threat", "Low Threat"]:
+                packet_info["threat_level"] = "Low Threat"
+
+        # Ports
+        if packet.haslayer(scapy.TCP):
+            tcp_layer = packet[scapy.TCP]
+            packet_info["sport"] = tcp_layer.sport
+            packet_info["dport"] = tcp_layer.dport
+        elif packet.haslayer(scapy.UDP):
+            udp_layer = packet[scapy.UDP]
+            packet_info["sport"] = udp_layer.sport
+            packet_info["dport"] = udp_layer.dport
+
+        # Resolved Domain
+        packet_info["resolved_domain"] = resolve_ip_to_domain(packet_info["destination"])
+
+        # DNS Query Handling
+        if packet.haslayer(scapy.DNSQR):
+            dns_query = packet[scapy.DNSQR].qname.decode().rstrip('.')
+            packet_info["dns_query"] = dns_query
+
+            # Repetitive DNS Query Detection
+            if seen_dns_queries[dns_query] >= 1:
+                packet_info["threat_level"] = "No Threat"
+                packet_info["malicious"] = False
+                return packet_info  # Ignore repetitive DNS queries
+            seen_dns_queries[dns_query] += 1
+
+    return packet_info
+
+# Function to Check and Update Threat Counts
+def check_threats(packet_info):
+    threat_level = packet_info["threat_level"]
+    if threat_level == "High Threat":
+        threat_counts["High"] += 1
+    elif threat_level == "Moderate Threat":
+        threat_counts["Moderate"] += 1
+    elif threat_level == "Low Threat":
+        threat_counts["Low"] += 1
+    else:
+        threat_counts["No Threat"] += 1
+
+    # Throttle pie chart updates
+    update_pie_chart()
+
+# Function to Display Packet Information in GUI
+def display_packet(packet):
+    packet_info = analyze_packet(packet)
+
+    # Filter out broadcast MAC addresses
+    if packet_info["dst_mac"] == "ff:ff:ff:ff:ff:ff":
+        return
+
+    # Update threat counts
+    check_threats(packet_info)
+
+    # Determine color based on threat level
+    threat_level = packet_info["threat_level"]
+    if threat_level == "High Threat":
+        color = "red"
+    elif threat_level == "Moderate Threat":
+        color = "orange"
+    elif threat_level == "Low Threat":
+        color = "blue"
+    else:
+        color = "green"
+
+    # Construct display text
+    display_text = (
+        f"Source MAC: {packet_info['src_mac']}\n"
+        f"Destination MAC: {packet_info['dst_mac']}\n"
+        f"Source IP: {packet_info['source']}\n"
+        f"Destination IP: {packet_info['destination']}\n"
+        f"Protocol: {packet_info['protocol']}\n"
+        f"Source Port: {packet_info['sport']}\n"
+        f"Destination Port: {packet_info['dport']}\n"
+        f"DNS Query: {packet_info['dns_query']}\n"
+        f"Resolved Domain: {packet_info['resolved_domain']}\n"
+        f"Device: {packet_info['device']}\n"
+        f"Threat Level: {threat_level}\n"
+    )
+
+    # Only add "[No Threat]" if the threat level is actually "No Threat"
+    if packet_info["threat_level"] == "No Threat":
+        display_text += "[No Threat]\n"
+
+    display_text += "-" * 40 + "\n"
+
+    # Add to queue for thread-safe GUI update
+    packet_queue.put((display_text, color))
+
+
+# Function to Update Pie Chart
+def update_pie_chart(force_update=False):
+    global last_pie_chart_update_time
+    current_time = time.time()
+
+    if force_update or (current_time - last_pie_chart_update_time) >= update_interval:
+        figure.clear()
+        ax = figure.add_subplot(111)
+        labels = []
+        sizes = []
+        colors_pie = []
+
+        for level, count in threat_counts.items():
+            if count > 0:
+                labels.append(f"{level} ({count})")
+                sizes.append(count)
+                if level == "High":
+                    colors_pie.append("red")
+                elif level == "Moderate":
+                    colors_pie.append("orange")
+                elif level == "Low":
+                    colors_pie.append("blue")
+                else:
+                    colors_pie.append("green")
+
+        if not sizes:
+            labels = ["No Threats Detected"]
+            sizes = [1]
+            colors_pie = ["grey"]
+
+        ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=colors_pie)
+        ax.axis('equal')  # Equal aspect ratio ensures pie chart is circular.
+        canvas.draw()
+
+        # Update labels
+        high_threat_label.config(text=f"High Threats: {threat_counts['High']}")
+        moderate_threat_label.config(text=f"Moderate Threats: {threat_counts['Moderate']}")
+        low_threat_label.config(text=f"Low Threats: {threat_counts['Low']}")
+        no_threat_label.config(text=f"No Threats: {threat_counts['No Threat']}")
+
+        last_pie_chart_update_time = current_time
+
+# Function to Process Queue and Update GUI
+def process_queue():
+    while not packet_queue.empty():
+        display_text, color = packet_queue.get()
+        scrolled_text.insert(tk.END, display_text, color)
+        scrolled_text.see(tk.END)
+    if sniffing:
+        root.after(100, process_queue)
+
+def start_sniffing(use_machine_learning=False):
+    global sniffing, sniff_thread, executor
+    if sniffing:
+        scrolled_text.insert(tk.END, "Sniffing is already running.\n", "info")
+        scrolled_text.see(tk.END)
+        return
+    sniffing = True
+    scrolled_text.insert(tk.END, "Starting packet sniffing...\n", "info")
+    scrolled_text.see(tk.END)
+
+    # Reset threat counts
+    for key in threat_counts:
+        threat_counts[key] = 0
+    update_pie_chart(force_update=True)
+
+    def sniff_packets():
+        # Enable promiscuous mode by setting promisc=True
+        if use_machine_learning:
+            scapy.sniff(prn=lambda pkt: executor.submit(analyze_packet_for_anomalies, pkt), store=False, promisc=True)
+        else:
+            scapy.sniff(prn=lambda pkt: executor.submit(display_packet, pkt), store=False, promisc=True)
+
+    sniff_thread = threading.Thread(target=sniff_packets, daemon=True)
+    sniff_thread.start()
+    root.after(100, process_queue)
+
+def start_training_data_collection():
+    global sniffing, sniff_thread, executor
+    if sniffing:
+        scrolled_text.insert(tk.END, "Already sniffing. Stop sniffing before training.\n", "info")
+        scrolled_text.see(tk.END)
+        return
+
+    def sniff_for_training():
+        # Collect normal traffic for training
+        scrolled_text.insert(tk.END, "Collecting normal traffic for training...\n", "info")
+        scapy.sniff(prn=lambda pkt: executor.submit(collect_training_data, pkt), store=False, promisc=True, count=1000)
+        scrolled_text.insert(tk.END, "Training data collected. Now training the model...\n", "info")
+        train_anomaly_detection_model()
+        scrolled_text.insert(tk.END, "Model trained. You can now use anomaly detection.\n", "info")
+        scrolled_text.see(tk.END)
+
+    sniff_thread = threading.Thread(target=sniff_for_training, daemon=True)
+    sniff_thread.start()
+
+
+
+# Function to Stop Packet Sniffing
+def stop_sniffing():
+    global sniffing, sniff_thread, executor
+    if not sniffing:
+        scrolled_text.insert(tk.END, "Sniffing is not running.\n", "info")
+        scrolled_text.see(tk.END)
+        return
+    sniffing = False
+    scapy.stop_sniff()
+    scrolled_text.insert(tk.END, "Stopping packet sniffing...\n", "info")
+    scrolled_text.see(tk.END)
+
+    # Shutdown executor
+    executor.shutdown(wait=True)
+
+    if sniff_thread and sniff_thread.is_alive():
+        sniff_thread.join(timeout=2)
+
+    scrolled_text.insert(tk.END, "Sniffing stopped.\n", "info")
+    scrolled_text.see(tk.END)
+
+# Function to Clear Packet Data
+def clear_packet_data():
+    scrolled_text.delete(1.0, tk.END)
+
+from tkinter import filedialog
+
+# Function to Generate Report
+from tkinter import filedialog
+
+from tkinter import filedialog
+
+from tkinter import filedialog
+
+# Function to Generate Report
+def generate_report():
+    global file_index
+    # Stop sniffing before generating the report
+    stop_sniffing()
+
+    # Initialize report header
+    report_text = "Packet Sniffing Report\n"
+    report_text += "=" * 30 + "\n\n"
+    report_text += f"Report Generated on: {datetime.datetime.now()}\n"
+    report_text += "\nSniffing Details:\n"
+    report_text += "-" * 20 + "\n"
+
+    # Retrieve all text from the scrolled_text widget (where packets are displayed)
+    packets = scrolled_text.get(1.0, tk.END).strip().split('\n')
+    packet_data = []
+
+    # Process packets and filter out invalid ones
+    current_packet = []
+    for line in packets:
+        if "Source MAC" in line:  # Start of a new packet
+            if current_packet:
+                combined_packet = "\n".join(current_packet)
+                # Filter out packets with invalid or N/A information
+                if not (
+                    "Source IP: N/A" in combined_packet and
+                    "Destination IP: N/A" in combined_packet and
+                    "Protocol: N/A" in combined_packet and
+                    "Source Port: N/A" in combined_packet and
+                    "Destination Port: N/A" in combined_packet and
+                    "DNS Query: N/A" in combined_packet and
+                    "Resolved Domain: N/A" in combined_packet
+                ):
+                    packet_data.append(combined_packet)  # Add valid packet
+                current_packet = []  # Reset for next packet
+        current_packet.append(line)  # Add lines to current packet
+
+    # Add the last packet if it exists and is valid
+    if current_packet:
+        combined_packet = "\n".join(current_packet)
+        if not (
+            "Source IP: N/A" in combined_packet and
+            "Destination IP: N/A" in combined_packet and
+            "Protocol: N/A" in combined_packet and
+            "Source Port: N/A" in combined_packet and
+            "Destination Port: N/A" in combined_packet and
+            "DNS Query: N/A" in combined_packet and
+            "Resolved Domain: N/A" in combined_packet
+        ):
+            packet_data.append(combined_packet)
+
+    # Append packet data to the report text
+    report_text += f"Total Packets Captured: {len(packet_data)}\n\n"
+    report_text += "Packet Information:\n"
+    report_text += "-" * 20 + "\n"
+
+    # Write each packet's details into the report text
+    for i, packet in enumerate(packet_data, start=1):
+        report_text += f"Packet {i}:\n{packet}\n\n"
+    
+    # Ensure that packet_data is not empty
+    if not packet_data:
+        scrolled_text.insert(tk.END, "No valid packet data captured. Report not generated.\n", "info")
+        scrolled_text.see(tk.END)
+        return  # Exit early if no packets are found
+
+    # Update the right-hand side `report_scrolled_text` with the report
+    report_scrolled_text.delete(1.0, tk.END)  # Clear the report display area
+    report_scrolled_text.insert(tk.END, report_text)  # Insert the report content into the report display
+
+    # Prompt the user to select a location to save the report
+    file_path = filedialog.asksaveasfilename(
+        defaultextension=".txt", 
+        filetypes=[("Text Files", "*.txt")], 
+        title="Save Report As"
+    )
+
+    # Save the report to the file with UTF-8 encoding if a path is provided
+    if file_path:
+        try:
+            with open(file_path, "w", encoding="utf-8") as report_file:
+                report_file.write(report_text)  # Ensure report_text is saved
+            scrolled_text.insert(tk.END, f"Report generated and saved as '{file_path}'\n", "info")
+        except Exception as e:
+            scrolled_text.insert(tk.END, f"Failed to save report: {e}\n", "info")
+    
+    scrolled_text.see(tk.END)
+
+    # Don't clear the packet data to retain the report in the GUI
+    #clear_packet_data()
+
+
+# Initialize Main Window
+root = tk.Tk()
+root.title("Packet Sniffing and Network Traffic Analysis")
+root.geometry("1400x800")  # Adjusted for pie chart display
+
+# Set Up Styles
+style = ttk.Style()
+style.theme_use('clam')
+
+# Define Colors for "Hacker-Themed" Appearance
+bg_color = "#000000"      # Black background
+fg_color = "#00FF00"      # Green text
+info_color = "#00FF00"    # Green text for info
+
+style.configure('TFrame', background=bg_color)
+style.configure('TLabel', background=bg_color, foreground=fg_color)
+style.configure('TButton', background=bg_color, foreground=fg_color, borderwidth=1)
+style.map('TButton', background=[('active', '#333333')], foreground=[('active', fg_color)])
+
+root.configure(bg=bg_color)
+
+# Frames Setup
+control_frame = ttk.Frame(root)
+control_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
+
+display_frame = ttk.Frame(root)
+display_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+report_frame = ttk.Frame(root)
+report_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+pie_chart_frame = ttk.Frame(root)
+pie_chart_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+# Scrolled Text Widget for Packet Display
+scrolled_text = scrolledtext.ScrolledText(display_frame, wrap=tk.WORD, background=bg_color, foreground=fg_color,
+                                        insertbackground=fg_color, font=("Consolas", 12))
+scrolled_text.tag_configure("info", foreground=info_color)
+scrolled_text.tag_configure("report", foreground=fg_color)
+scrolled_text.tag_configure("red", foreground="red")
+scrolled_text.tag_configure("orange", foreground="orange")
+scrolled_text.tag_configure("blue", foreground="blue")
+scrolled_text.tag_configure("green", foreground="green")
+scrolled_text.tag_configure("report", foreground="cyan")
+scrolled_text.pack(fill=tk.BOTH, expand=True)
+
+# Scrolled Text Widget for Report Display
+report_scrolled_text = scrolledtext.ScrolledText(report_frame, wrap=tk.WORD,
+                                                background=bg_color,
+                                                foreground=fg_color,
+                                                insertbackground=fg_color,
+                                                font=("Consolas", 12))
+report_scrolled_text.tag_configure("report", foreground=fg_color)
+report_scrolled_text.pack(fill=tk.BOTH, expand=True)
+
+# Create Matplotlib Figure for Pie Chart
+figure = plt.Figure(figsize=(5, 4), dpi=100, facecolor=bg_color)
+canvas = FigureCanvasTkAgg(figure, pie_chart_frame)
+canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+# Labels for Live Threat Counts
+high_threat_label = ttk.Label(control_frame, text="High Threats: 0", foreground="red")
+high_threat_label.pack(side=tk.LEFT, padx=5, pady=5)
+
+moderate_threat_label = ttk.Label(control_frame, text="Moderate Threats: 0", foreground="orange")
+moderate_threat_label.pack(side=tk.LEFT, padx=5, pady=5)
+
+low_threat_label = ttk.Label(control_frame, text="Low Threats: 0", foreground="blue")
+low_threat_label.pack(side=tk.LEFT, padx=5, pady=5)
+
+no_threat_label = ttk.Label(control_frame, text="No Threats: 0", foreground="green")
+no_threat_label.pack(side=tk.LEFT, padx=5, pady=5)
+
+# Initialize Pie Chart with No Data
+def initialize_pie_chart():
+    ax = figure.add_subplot(111)
+    labels = ["No Threats Detected"]
+    sizes = [1]
+    colors_pie = ["grey"]
+    ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=colors_pie)
+    ax.axis('equal')
+    canvas.draw()
+
+# Buttons for Control
+
+start_button = ttk.Button(control_frame, text="Start Sniffing", command=start_sniffing)
+stop_button = ttk.Button(control_frame, text="Stop Sniffing", command=stop_sniffing)
+generate_report_button = ttk.Button(control_frame, text="Generate Report", command=generate_report)
+ml_sniff_button = ttk.Button(control_frame, text="Start ML-Based Sniffing", command=lambda: start_sniffing(use_machine_learning=True))
+train_model_button = ttk.Button(control_frame, text="Collect & Train ML Model", command=start_training_data_collection)
+ml_sniff_button.pack(side=tk.LEFT, padx=5, pady=5)
+train_model_button.pack(side=tk.LEFT, padx=5, pady=5)
+start_button.pack(side=tk.LEFT, padx=5, pady=5)
+stop_button.pack(side=tk.LEFT, padx=5, pady=5)
+generate_report_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+# Initialize the Pie Chart
+initialize_pie_chart()
+
+# Start the GUI Event Loop
+root.mainloop()
