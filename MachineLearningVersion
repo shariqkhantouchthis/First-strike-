@@ -491,9 +491,11 @@ from tkinter import filedialog
 
 from tkinter import filedialog
 
-# Function to Generate Report
+# Function to Generate Report with Threat Level Filtering
+
 def generate_report():
     global file_index
+
     # Stop sniffing before generating the report
     stop_sniffing()
 
@@ -508,39 +510,32 @@ def generate_report():
     packets = scrolled_text.get(1.0, tk.END).strip().split('\n')
     packet_data = []
 
-    # Process packets and filter out invalid ones
+    # Filter based on the selected threat level
+    selected_threat = selected_filter.get()  # Get the currently selected filter
+
     current_packet = []
     for line in packets:
         if "Source MAC" in line:  # Start of a new packet
             if current_packet:
                 combined_packet = "\n".join(current_packet)
-                # Filter out packets with invalid or N/A information
-                if not (
-                    "Source IP: N/A" in combined_packet and
-                    "Destination IP: N/A" in combined_packet and
-                    "Protocol: N/A" in combined_packet and
-                    "Source Port: N/A" in combined_packet and
-                    "Destination Port: N/A" in combined_packet and
-                    "DNS Query: N/A" in combined_packet and
-                    "Resolved Domain: N/A" in combined_packet
-                ):
-                    packet_data.append(combined_packet)  # Add valid packet
-                current_packet = []  # Reset for next packet
+                threat_level_line = [line for line in current_packet if "Threat Level" in line]
+                if threat_level_line:
+                    threat_level = threat_level_line[0].split(":")[-1].strip()
+                    # Check if the current packet matches the selected filter
+                    if selected_threat == "All" or threat_level == selected_threat:
+                        # Add valid packet data to the report
+                        packet_data.append(combined_packet)
+                current_packet = []  # Reset for the next packet
         current_packet.append(line)  # Add lines to current packet
 
-    # Add the last packet if it exists and is valid
+    # Add the last packet if it exists and matches the selected filter
     if current_packet:
         combined_packet = "\n".join(current_packet)
-        if not (
-            "Source IP: N/A" in combined_packet and
-            "Destination IP: N/A" in combined_packet and
-            "Protocol: N/A" in combined_packet and
-            "Source Port: N/A" in combined_packet and
-            "Destination Port: N/A" in combined_packet and
-            "DNS Query: N/A" in combined_packet and
-            "Resolved Domain: N/A" in combined_packet
-        ):
-            packet_data.append(combined_packet)
+        threat_level_line = [line for line in current_packet if "Threat Level" in line]
+        if threat_level_line:
+            threat_level = threat_level_line[0].split(":")[-1].strip()
+            if selected_threat == "All" or threat_level == selected_threat:
+                packet_data.append(combined_packet)
 
     # Append packet data to the report text
     report_text += f"Total Packets Captured: {len(packet_data)}\n\n"
@@ -550,7 +545,7 @@ def generate_report():
     # Write each packet's details into the report text
     for i, packet in enumerate(packet_data, start=1):
         report_text += f"Packet {i}:\n{packet}\n\n"
-    
+
     # Ensure that packet_data is not empty
     if not packet_data:
         scrolled_text.insert(tk.END, "No valid packet data captured. Report not generated.\n", "info")
@@ -678,6 +673,21 @@ train_model_button.pack(side=tk.LEFT, padx=5, pady=5)
 start_button.pack(side=tk.LEFT, padx=5, pady=5)
 stop_button.pack(side=tk.LEFT, padx=5, pady=5)
 generate_report_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+# Add a Label and Dropdown Menu for Threat Level Filter in Control Frame
+filter_label = ttk.Label(control_frame, text="Filter by Threat Level:", foreground=fg_color)
+filter_label.pack(side=tk.LEFT, padx=5, pady=5)
+
+# Define possible filter options with an empty option to represent "no selection"
+filter_options = ["", "All", "High Threat", "Moderate Threat", "Low Threat"]
+
+# StringVar to store the currently selected filter option
+selected_filter = tk.StringVar()
+selected_filter.set("")  # Set the default value to an empty string (no selection)
+
+# Dropdown menu for selecting the filter
+filter_menu = ttk.OptionMenu(control_frame, selected_filter, *filter_options)
+filter_menu.pack(side=tk.LEFT, padx=5, pady=5)
 
 # Initialize the Pie Chart
 initialize_pie_chart()
