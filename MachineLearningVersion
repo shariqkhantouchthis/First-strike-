@@ -22,6 +22,7 @@ model = IsolationForest(n_estimators=100, contamination=0.01, random_state=42)
 # Store data for training (collect normal traffic features)
 packet_data_for_training = []
 
+
 # Function to extract features from a packet
 def extract_features(packet):
     """
@@ -104,6 +105,11 @@ sniff_thread = None
 packet_queue = queue.Queue(maxsize=50)
 max_workers = min(64, cpu_count() * 2)
 executor = ThreadPoolExecutor(max_workers=max_workers)
+# Global set to track unique MAC addresses
+unique_devices = set()
+
+# Global set to track unique MAC addresses
+unique_devices = set()
 
 # Threat Counts for Pie Chart
 threat_counts = {"High": 0, "Moderate": 0, "Low": 0, "No Threat": 0}
@@ -243,6 +249,11 @@ def analyze_packet(packet):
         packet_info["destination"] = ip_layer.dst
         protocol_id = ip_layer.proto
         packet_info["protocol"] = protocol_id
+
+        # Track the source MAC address as a unique device
+        if packet_info["src_mac"] != "N/A":
+            unique_devices.add(packet_info["src_mac"])  # Track unique MACs
+
 
         # Base Threat Level from Protocol
         base_threat_level = protocol_threat_levels.get(protocol_id, "Unknown Threat Level")
@@ -485,12 +496,6 @@ def clear_packet_data():
 from tkinter import filedialog
 
 # Function to Generate Report
-from tkinter import filedialog
-
-from tkinter import filedialog
-
-from tkinter import filedialog
-
 # Function to Generate Report with Threat Level Filtering
 
 def generate_report():
@@ -512,6 +517,17 @@ def generate_report():
 
     # Filter based on the selected threat level
     selected_threat = selected_filter.get()  # Get the currently selected filter
+
+
+# Handle "Device Count" filter
+    if selected_threat == "Device Count":
+        report_text += f"Total Unique Devices Detected: {len(unique_devices)}\n"
+        report_text += f"Unique MAC Addresses:\n"
+        for mac in unique_devices:
+            report_text += f"{mac}\n"
+        report_scrolled_text.delete(1.0, tk.END)
+        report_scrolled_text.insert(tk.END, report_text)
+        return
 
     current_packet = []
     for line in packets:
@@ -679,11 +695,11 @@ filter_label = ttk.Label(control_frame, text="Filter by Threat Level:", foregrou
 filter_label.pack(side=tk.LEFT, padx=5, pady=5)
 
 # Define possible filter options with an empty option to represent "no selection"
-filter_options = ["", "All", "High Threat", "Moderate Threat", "Low Threat"]
+filter_options = ["","All", "High Threat", "Moderate Threat", "Low Threat","Device Count"]
 
 # StringVar to store the currently selected filter option
 selected_filter = tk.StringVar()
-selected_filter.set("")  # Set the default value to an empty string (no selection)
+selected_filter.set("All")  # Set the default value to an empty string (no selection)
 
 # Dropdown menu for selecting the filter
 filter_menu = ttk.OptionMenu(control_frame, selected_filter, *filter_options)
