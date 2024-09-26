@@ -13,7 +13,6 @@ from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
 from sklearn.ensemble import IsolationForest
 import numpy as np
-import time
 
 
 # Create an Isolation Forest model
@@ -23,23 +22,38 @@ model = IsolationForest(n_estimators=100, contamination=0.01, random_state=42)
 packet_data_for_training = []
 
 
-# Function to extract features from a packet
 def extract_features(packet):
     """
     Extract features from the packet to be used for anomaly detection.
-    Example features: source IP, destination IP, protocol, ports, packet length.
+    Example features: source IP (as integer), destination IP (as integer), protocol, 
+    payload length, timestamp for inter-arrival time.
     """
     if packet.haslayer(scapy.IP):
         ip_layer = packet[scapy.IP]
+        # Convert IP addresses to integers
+        src_ip_int = int.from_bytes(socket.inet_aton(ip_layer.src), 'big')
+        dst_ip_int = int.from_bytes(socket.inet_aton(ip_layer.dst), 'big')
+
+        # Get protocol as is (already an integer)
+        protocol = ip_layer.proto
+
+        # Use the payload length instead of the raw payload (numeric)
+        payload_length = len(packet[scapy.Raw].load) if packet.haslayer(scapy.Raw) else 0
+
+        # Get the current timestamp
+        timestamp = time.time()
+
+        # Return a list of features, all numeric
         features = [
-            ip_layer.src,                   # Source IP
-            ip_layer.dst,                   # Destination IP
-            ip_layer.proto,                 # Protocol
-            packet[scapy.Raw].load,         # Payload size (if available)
-            time.time()                     # Timestamp to calculate inter-arrival time
+            src_ip_int,           # Source IP as integer
+            dst_ip_int,           # Destination IP as integer
+            protocol,             # Protocol
+            payload_length,       # Payload length
+            timestamp             # Timestamp
         ]
         return features
     return None
+
 
 # Function to train the model on normal traffic data
 def train_anomaly_detection_model():
@@ -76,8 +90,6 @@ def collect_training_data(packet):
 # Use this function to collect normal traffic for training
 # scapy.sniff(prn=collect_training_data, store=False, count=1000)  # Collect 1000 packets
 
-
-
 # Attempt to import scapy, install if not present
 try:
     import scapy.all as scapy
@@ -86,17 +98,6 @@ except ImportError:
     import sys
     subprocess.check_call([sys.executable, "-m", "pip", "install", "scapy"])
     import scapy.all as scapy
-
-# Attempt to import matplotlib, install if not present
-try:
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-except ImportError:
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "matplotlib"])
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # Global Variables
 sniffing = False
@@ -313,6 +314,13 @@ def check_threats(packet_info):
     else:
         threat_counts["No Threat"] += 1
 
+    # Update the labels in the GUI to reflect the current threat counts
+    high_threat_label.config(text=f"High Threats: {threat_counts['High']}")
+    moderate_threat_label.config(text=f"Moderate Threats: {threat_counts['Moderate']}")
+    low_threat_label.config(text=f"Low Threats: {threat_counts['Low']}")
+    no_threat_label.config(text=f"No Threats: {threat_counts['No Threat']}")
+
+
 
 # Function to Display Packet Information in GUI
 def display_packet(packet):
@@ -406,7 +414,7 @@ def start_training_data_collection():
     def sniff_for_training():
         # Collect normal traffic for training
         scrolled_text.insert(tk.END, "Collecting normal traffic for training...\n", "info")
-        scapy.sniff(prn=lambda pkt: executor.submit(collect_training_data, pkt), store=False, promisc=True, count=1000)
+        scapy.sniff(prn=lambda pkt: executor.submit(collect_training_data, pkt), store=False, promisc=True, count=500) # change sniffinf count for training
         scrolled_text.insert(tk.END, "Training data collected. Now training the model...\n", "info")
         train_anomaly_detection_model()
         scrolled_text.insert(tk.END, "Model trained. You can now use anomaly detection.\n", "info")
@@ -438,13 +446,8 @@ def stop_sniffing():
     scrolled_text.insert(tk.END, "Sniffing stopped.\n", "info")
     scrolled_text.see(tk.END)
 
-# Function to Clear Packet Data
-def clear_packet_data():
-    scrolled_text.delete(1.0, tk.END)
-
 from tkinter import filedialog
 
-# Function to Generate Report
 # Function to Generate Report with Threat Level Filtering
 
 def generate_report():
@@ -539,10 +542,6 @@ def generate_report():
     
     scrolled_text.see(tk.END)
 
-    # Don't clear the packet data to retain the report in the GUI
-    #clear_packet_data()
-
-
 # Initialize Main Window
 root = tk.Tk()
 root.title("Packet Sniffing and Network Traffic Analysis")
@@ -567,10 +566,8 @@ root.configure(bg=bg_color)
 # Frames Setup
 control_frame = ttk.Frame(root)
 control_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
-
 display_frame = ttk.Frame(root)
 display_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
-
 report_frame = ttk.Frame(root)
 report_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
