@@ -21,13 +21,14 @@ model = IsolationForest(n_estimators=100, contamination=0.01, random_state=42)
 # Store data for training (collect normal traffic features)
 packet_data_for_training = []
 
-
 def extract_features(packet):
     """
     Extract features from the packet to be used for anomaly detection.
     Example features: source IP (as integer), destination IP (as integer), protocol, 
-    payload length, timestamp for inter-arrival time.
+    payload length, timestamp for inter-arrival time, TCP flags, ICMP type/code.
     """
+    features = []
+
     if packet.haslayer(scapy.IP):
         ip_layer = packet[scapy.IP]
         # Convert IP addresses to integers
@@ -37,22 +38,43 @@ def extract_features(packet):
         # Get protocol as is (already an integer)
         protocol = ip_layer.proto
 
-        # Use the payload length instead of the raw payload (numeric)
+        # Use the payload length (numeric) if present
         payload_length = len(packet[scapy.Raw].load) if packet.haslayer(scapy.Raw) else 0
 
         # Get the current timestamp
         timestamp = time.time()
 
-        # Return a list of features, all numeric
+        # Basic features: source IP, destination IP, protocol, payload length, timestamp
         features = [
-            src_ip_int,           # Source IP as integer
-            dst_ip_int,           # Destination IP as integer
-            protocol,             # Protocol
-            payload_length,       # Payload length
-            timestamp             # Timestamp
+            src_ip_int,         # Source IP as integer
+            dst_ip_int,         # Destination IP as integer
+            protocol,           # Protocol
+            payload_length,     # Payload length
+            timestamp           # Timestamp
         ]
+
+        # TCP Flags
+        if packet.haslayer(scapy.TCP):
+            tcp_layer = packet[scapy.TCP]
+            tcp_flags = int(tcp_layer.flags)  # Convert TCP flags to integer
+            features.append(tcp_flags)   # Append TCP flags to feature set
+        else:
+            features.append(0)  # Default value when TCP flags are missing
+
+        # ICMP Type/Code
+        if packet.haslayer(scapy.ICMP):
+            icmp_layer = packet[scapy.ICMP]
+            icmp_type = icmp_layer.type  # Extract ICMP type
+            icmp_code = icmp_layer.code  # Extract ICMP code
+            features.append(icmp_type)
+            features.append(icmp_code)
+        else:
+            # Append default values when ICMP is not present
+            features.extend([0, 0])
+
         return features
     return None
+
 
 
 # Function to train the model on normal traffic data
@@ -64,6 +86,70 @@ def train_anomaly_detection_model():
         model.fit(packet_data_array)
         print("Anomaly detection model trained on normal traffic.")
 
+def display_packet_info(packet_info):
+    # Determine color based on threat level
+    threat_level = packet_info["threat_level"]
+    if threat_level == "High Threat":
+        color = "red"
+    elif threat_level == "Moderate Threat":
+        color = "orange"
+    elif threat_level == "Low Threat":
+        color = "blue"
+    else:
+        color = "green"
+
+    # Construct display text
+    display_text = (
+        f"Source MAC: {packet_info['src_mac']}\n"
+        f"Destination MAC: {packet_info['dst_mac']}\n"
+        f"Source IP: {packet_info['source']}\n"
+        f"Destination IP: {packet_info['destination']}\n"
+        f"Protocol: {packet_info['protocol']}\n"
+        f"Source Port: {packet_info['sport']}\n"
+        f"Destination Port: {packet_info['dport']}\n"
+        f"DNS Query: {packet_info['dns_query']}\n"
+        f"Resolved Domain: {packet_info['resolved_domain']}\n"
+        f"Device: {packet_info['device']}\n"
+        f"Threat Level: {threat_level}\n"
+        "-" * 40 + "\n"
+    )
+
+    # Add to queue for thread-safe GUI update
+    packet_queue.put((display_text, color))
+
+def display_packet_info(packet_info):
+    # Determine color based on threat level
+    threat_level = packet_info["threat_level"]
+    if threat_level == "High Threat":
+        color = "red"
+    elif threat_level == "Moderate Threat":
+        color = "orange"
+    elif threat_level == "Low Threat":
+        color = "blue"
+    else:
+        color = "green"
+
+    # Construct display text
+    display_text = (
+        f"Source MAC: {packet_info['src_mac']}\n"
+        f"Destination MAC: {packet_info['dst_mac']}\n"
+        f"Source IP: {packet_info['source']}\n"
+        f"Destination IP: {packet_info['destination']}\n"
+        f"Protocol: {packet_info['protocol']}\n"
+        f"Source Port: {packet_info['sport']}\n"
+        f"Destination Port: {packet_info['dport']}\n"
+        f"DNS Query: {packet_info['dns_query']}\n"
+        f"Resolved Domain: {packet_info['resolved_domain']}\n"
+        f"Device: {packet_info['device']}\n"
+        f"Threat Level: {threat_level}\n"
+        "-" * 40 + "\n"
+    )
+
+    # Add to queue for thread-safe GUI update
+    packet_queue.put((display_text, color))
+
+
+
 # Analyze packets for anomaly detection
 def analyze_packet_for_anomalies(packet):
     features = extract_features(packet)
@@ -74,18 +160,27 @@ def analyze_packet_for_anomalies(packet):
         # Use the model to predict if the packet is an anomaly
         is_anomaly = model.predict(features_array)[0] == -1
 
+        packet_info = analyze_packet(packet)  # Use the existing function to analyze packet details
+
         if is_anomaly:
             print(f"Anomalous Packet Detected: {features}")
-            # Update threat counts or trigger alerts based on anomaly detection
             check_threats({"threat_level": "High Threat"})
+            packet_info['threat_level'] = "High Threat"
         else:
             check_threats({"threat_level": "No Threat"})
+            packet_info['threat_level'] = "No Threat"
+
+        # Send the packet information to be displayed in the scrolled text area
+        display_packet_info(packet_info)
+
 
 # Function to collect normal traffic for training
 def collect_training_data(packet):
     features = extract_features(packet)
     if features is not None:
         packet_data_for_training.append(features)
+        scrolled_text.insert(tk.END, f"Collected {len(packet_data_for_training)} packets...\n", "info")
+        scrolled_text.see(tk.END)
 
 # Use this function to collect normal traffic for training
 # scapy.sniff(prn=collect_training_data, store=False, count=1000)  # Collect 1000 packets
@@ -378,6 +473,9 @@ def process_queue():
     if sniffing:
         root.after(100, process_queue)
 
+
+
+
 def start_sniffing(use_machine_learning=False):
     global sniffing, sniff_thread, executor
     if sniffing:
@@ -385,6 +483,7 @@ def start_sniffing(use_machine_learning=False):
         scrolled_text.see(tk.END)
         return
     sniffing = True
+    stop_sniffing_flag = False  # Reset stop flag when starting sniffing
     scrolled_text.insert(tk.END, "Starting packet sniffing...\n", "info")
     scrolled_text.see(tk.END)
 
@@ -394,6 +493,10 @@ def start_sniffing(use_machine_learning=False):
     
 
     def sniff_packets():
+        def stop_filter(packet):
+            # Stop the sniffing when the stop_sniffing_flag is set to True
+            return stop_sniffing_flag
+
         # Enable promiscuous mode by setting promisc=True
         if use_machine_learning:
             scapy.sniff(prn=lambda pkt: executor.submit(analyze_packet_for_anomalies, pkt), store=False, promisc=True)
@@ -406,24 +509,47 @@ def start_sniffing(use_machine_learning=False):
 
 def start_training_data_collection():
     global sniffing, sniff_thread, executor
+
     if sniffing:
         scrolled_text.insert(tk.END, "Already sniffing. Stop sniffing before training.\n", "info")
         scrolled_text.see(tk.END)
         return
 
-    def sniff_for_training():
-        # Collect normal traffic for training
-        scrolled_text.insert(tk.END, "Collecting normal traffic for training...\n", "info")
-        scapy.sniff(prn=lambda pkt: executor.submit(collect_training_data, pkt), store=False, promisc=True, count=500) # change sniffinf count for training
-        scrolled_text.insert(tk.END, "Training data collected. Now training the model...\n", "info")
+    sniffing = True
+
+    def stop_sniffing_after_training():
+        global sniffing
+        sniffing = False
+        scrolled_text.insert(tk.END, "Training data collection complete. Stopping sniffing...\n", "info")
+        scrolled_text.see(tk.END)
+        
+        scrolled_text.insert(tk.END, "Training the anomaly detection model...\n", "info")
         train_anomaly_detection_model()
-        scrolled_text.insert(tk.END, "Model trained. You can now use anomaly detection.\n", "info")
+        scrolled_text.insert(tk.END, "Model training complete. You can now use the model for anomaly detection.\n", "info")
         scrolled_text.see(tk.END)
 
+    def sniff_for_training():
+        scrolled_text.insert(tk.END, "Collecting normal traffic for training...\n", "info")
+        scrolled_text.see(tk.END)
+
+        def stop_sniffing_after_500_packets(packet):
+            if len(packet_data_for_training) >= 500:
+                stop_sniffing_after_training()
+                return True
+            return False
+
+        # Start sniffing, will automatically stop after 500 packets
+        scapy.sniff(prn=lambda pkt: executor.submit(collect_training_data, pkt), 
+                    store=False, 
+                    promisc=True, 
+                    stop_filter=stop_sniffing_after_500_packets)
+
+    # Start sniffing in a separate thread
     sniff_thread = threading.Thread(target=sniff_for_training, daemon=True)
     sniff_thread.start()
 
-
+    # Start processing the queue for live updates
+    root.after(100, process_queue)
 
 # Function to Stop Packet Sniffing
 def stop_sniffing():
@@ -440,11 +566,23 @@ def stop_sniffing():
     # Shutdown executor
     executor.shutdown(wait=True)
 
+    # Wait for the sniffing thread to stop
+    sniffing = False
     if sniff_thread and sniff_thread.is_alive():
         sniff_thread.join(timeout=2)
 
+    # Shutdown executor
+    executor.shutdown(wait=True)
+
     scrolled_text.insert(tk.END, "Sniffing stopped.\n", "info")
     scrolled_text.see(tk.END)
+
+
+
+
+
+
+
 
 from tkinter import filedialog
 
